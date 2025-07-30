@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Wildcards for NovelAI Diffusion",
-  "description": "swap __wildcards__ prompts to .txt file content",
-  "version": "2.1.5",
+  "description": "Enhanced wildcards with weighted selection, conditional logic, and hierarchical support for NovelAI Diffusion",
+  "version": "3.0.0",
   "permissions": ["storage"],
   "host_permissions": ["https://image.novelai.net/*"],
   "content_scripts": [

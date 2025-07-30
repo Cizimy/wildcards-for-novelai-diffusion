@@ -1,0 +1,29 @@
+dusk:1.5
+dusk, dark:1
+dusk, dim lighting:1
+dusk, light:1.2
+dusk, twilight:1.5
+morning:2
+morning, dark:1
+morning, dim lighting:1
+morning, light:1.5
+morning, twilight:1.5
+day:3
+day, dark:0.5
+day, dim lighting:1
+day, light:2
+afternoon:2
+evening:2
+evening, dark:1
+evening, dim lighting:1
+evening, light:1.5
+evening, sunset:2
+night:2
+night, dark:1.5
+night, dim lighting:1
+night, light:1
+night, sunset:1
+night, darkness:1
+midnight:1
+dawn:1
+golden hour:1.5

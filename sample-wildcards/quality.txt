@@ -1,0 +1,10 @@
+masterpiece:3
+best quality:3
+very aesthetic:2
+high resolution:2
+detailed:2
+sharp focus:1.5
+professional:1.5
+artistic:1
+beautiful:2
+stunning:1.5

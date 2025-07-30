@@ -1,0 +1,34 @@
+{
+  "name": "wildcards-for-novelai-diffusion-enhanced",
+  "version": "3.0.0",
+  "description": "Enhanced wildcards extension with weighted selection, conditional logic, and hierarchical wildcard support for NovelAI Diffusion",
+  "main": "injector.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "echo \"Load extension in developer mode\"",
+    "build": "echo \"No build step required for this Chrome extension\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cizimy/wildcards-for-novelai-diffusion.git"
+  },
+  "keywords": [
+    "novelai",
+    "diffusion",
+    "wildcards",
+    "chrome-extension",
+    "image-generation",
+    "ai",
+    "prompts",
+    "weighted-selection",
+    "conditional-logic"
+  ],
+  "author": "Enhanced by Cizimy",
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

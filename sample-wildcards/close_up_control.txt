@@ -1,0 +1,7 @@
+@if{composition=profile:close-up:0.8|}
+@if{composition=portrait:close-up:0.8|}
+@if{composition=upper_body:close-up:0.8|}
+@if{composition=torso_shot:close-up:0.8|}
+@if{composition=lower_body:!close-up|}
+@if{composition=cowboy_shot:!close-up|}
+@if{composition=full_body:!close-up|}

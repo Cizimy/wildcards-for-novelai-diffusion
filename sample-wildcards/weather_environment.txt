@@ -1,0 +1,2 @@
+@scene{outdoor:sunny:3|cloudy:2|rainy:1|}
+@scene{indoor:!sunny !cloudy !rainy|}

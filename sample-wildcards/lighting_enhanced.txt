@@ -1,0 +1,4 @@
+overlighting:1
+sidelighting:2
+backlighting:1.5
+underlighting:1

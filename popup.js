@@ -12,10 +12,15 @@ fileInput.addEventListener('change', () => {
 
     let remaining = files.length;
     files.forEach(f => {
-      const key = f.name.replace(/\.[^.]+$/, '');
+      // Enhanced: Support hierarchical file names (scene_indoor.txt, lighting_natural.txt)
+      let key = f.name.replace(/\.[^.]+$/, '');
+      
+      // Convert underscores and hyphens to forward slashes for hierarchy display
+      const hierarchicalKey = key.replace(/[_-]/g, '/');
 
       const reader = new FileReader();
       reader.onload = () => {
+        // Store with original key but display hierarchically
         map[key] = reader.result;
         if (--remaining === 0) {
           chrome.storage.local.set({ wildcards: map }, refresh);
@@ -48,17 +53,54 @@ function refresh() {
     }
     list.appendChild(delAll);
 
+    // Enhanced: Group wildcards by hierarchy and display them organized
+    const groupedWildcards = {};
+    
     Object.keys(map).forEach(name => {
-      const li = document.createElement('li');
-      li.textContent = `${name}.txt`;
-      const del = document.createElement('button');
-      del.textContent = 'delete';
-      del.onclick = () => {
-        delete map[name];
-        chrome.storage.local.set({ wildcards: map }, refresh);
-      };
-      li.appendChild(del);
-      list.appendChild(li);
+      // Create hierarchical display name
+      const displayName = name.replace(/[_-]/g, '/');
+      const parts = displayName.split('/');
+      
+      if (parts.length > 1) {
+        const category = parts[0];
+        if (!groupedWildcards[category]) {
+          groupedWildcards[category] = [];
+        }
+        groupedWildcards[category].push(name);
+      } else {
+        if (!groupedWildcards['_root']) {
+          groupedWildcards['_root'] = [];
+        }
+        groupedWildcards['_root'].push(name);
+      }
+    });
+
+    // Display organized wildcards
+    Object.keys(groupedWildcards).sort().forEach(category => {
+      if (category !== '_root') {
+        const categoryHeader = document.createElement('h4');
+        categoryHeader.textContent = `${category}/`;
+        categoryHeader.style.margin = '10px 0 5px 0';
+        categoryHeader.style.color = '#666';
+        categoryHeader.style.fontSize = '14px';
+        list.appendChild(categoryHeader);
+      }
+      
+      groupedWildcards[category].sort().forEach(name => {
+        const li = document.createElement('li');
+        const displayName = name.replace(/[_-]/g, '/');
+        li.textContent = `${displayName}.txt`;
+        li.style.paddingLeft = category !== '_root' ? '15px' : '0px';
+        
+        const del = document.createElement('button');
+        del.textContent = 'delete';
+        del.onclick = () => {
+          delete map[name];
+          chrome.storage.local.set({ wildcards: map }, refresh);
+        };
+        li.appendChild(del);
+        list.appendChild(li);
+      });
     });
   });
 }

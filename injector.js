@@ -132,10 +132,53 @@
       preservePrompt = !!e.data.preservePrompt; // preservePrompt 플래그 설정
     }
   });
-  /******** 1. swap logic ********/
+  /******** 1. Enhanced swap logic with weighted selection ********/
+  
+  // Helper function for weighted random selection
+  function chooseWeighted(opts) {
+    const weighted = opts.map(s => {
+      const colonIndex = s.indexOf(':');
+      if (colonIndex === -1) {
+        return { weight: 1, label: s.trim() };
+      }
+      const weight = parseFloat(s.substring(0, colonIndex)) || 1;
+      const label = s.substring(colonIndex + 1).trim();
+      return { weight, label };
+    });
+    
+    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+    if (totalWeight <= 0) return weighted[0]?.label || '';
+    
+    let random = Math.random() * totalWeight;
+    for (const item of weighted) {
+      random -= item.weight;
+      if (random <= 0) return item.label;
+    }
+    return weighted[weighted.length - 1].label;
+  }
+
   function swap(txt) {
-    let result = txt.replace(/__([A-Za-z0-9_-]+)__/g, (match, name) => {
+    // Enhanced: Support hierarchical wildcards with slash notation (scene/indoor, lighting/natural, etc.)
+    let result = txt.replace(/__([A-Za-z0-9_\/-]+)__/g, (match, name) => {
       let raw = dict[name];
+      
+      // If direct match not found, try hierarchical lookup
+      if (!raw && name.includes('/')) {
+        // Try variations: scene/indoor -> scene_indoor, scene-indoor
+        const variations = [
+          name.replace(/\//g, '_'),
+          name.replace(/\//g, '-'),
+          name.replace(/\//g, '')
+        ];
+        
+        for (const variation of variations) {
+          if (dict[variation]) {
+            raw = dict[variation];
+            break;
+          }
+        }
+      }
+      
       if (!raw) return match;
       raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
       const lines = raw.split(/\r?\n/).filter(Boolean);
@@ -148,16 +191,88 @@
         return `||${lines.join('|')}||`;
       }
     });
+
+    // Enhanced: Support weighted selection in curly braces {option1:weight1|option2:weight2}
     result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
       const opts = group.split('|');
-      return opts[Math.floor(Math.random() * opts.length)];
+      // Check if any option contains weight (has colon)
+      if (opts.some(opt => opt.includes(':'))) {
+        return chooseWeighted(opts);
+      } else {
+        return opts[Math.floor(Math.random() * opts.length)];
+      }
     });
+
+    // Enhanced: Support weighted selection in double pipes ||option1:weight1|option2:weight2||
     result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (match, group) => {
       const opts = group.split('|');
-      return opts[Math.floor(Math.random() * opts.length)];
+      // Check if any option contains weight (has colon)
+      if (opts.some(opt => opt.includes(':'))) {
+        return chooseWeighted(opts);
+      } else {
+        return opts[Math.floor(Math.random() * opts.length)];
+      }
     });
+
+    // Enhanced: Conditional logic support @if{variable=value:true_option|false_option}
+    result = result.replace(/@if\{([A-Za-z0-9_]+)=([^:}]+):([^|}]+)\|([^}]+)\}/g, (match, varName, varValue, trueOption, falseOption) => {
+      // For now, we'll check if the variable was previously set in the text
+      // This is a simplified implementation - in a full version, you'd maintain state
+      const contextPattern = new RegExp(`\\b${varName}\\s*=\\s*${varValue}\\b`, 'i');
+      const hasCondition = txt.includes(`${varName}=${varValue}`) || contextPattern.test(txt);
+      return hasCondition ? trueOption : falseOption;
+    });
+
+    // Enhanced: Scene-based conditional logic @scene{indoor:__indoor_tags__|__outdoor_tags__}
+    result = result.replace(/@scene\{([^:}]+):([^|}]+)\|([^}]+)\}/g, (match, sceneType, indoorOption, outdoorOption) => {
+      // Check if the current context suggests indoor or outdoor scene
+      const indoorKeywords = ['indoor', 'bedroom', 'office', 'classroom', 'kitchen', 'bathroom', 'living room'];
+      const outdoorKeywords = ['outdoor', 'forest', 'street', 'beach', 'park', 'sky', 'mountain'];
+      
+      const text = txt.toLowerCase();
+      const hasIndoor = indoorKeywords.some(keyword => text.includes(keyword));
+      const hasOutdoor = outdoorKeywords.some(keyword => text.includes(keyword));
+      
+      if (sceneType.toLowerCase() === 'indoor' || hasIndoor) {
+        return indoorOption;
+      } else if (sceneType.toLowerCase() === 'outdoor' || hasOutdoor) {
+        return outdoorOption;
+      } else {
+        // Default fallback - randomly choose
+        return Math.random() < 0.5 ? indoorOption : outdoorOption;
+      }
+    });
+
     return result;
   }
+
+  // Enhanced: Exclusion control for conflicting tags
+  function removeExclusiveTags(text) {
+    // Remove tags marked with ! prefix that conflict with existing tags
+    const exclusionPattern = /!([A-Za-z0-9_-]+)/g;
+    const exclusions = [];
+    let match;
+    
+    // Collect all exclusion tags
+    while ((match = exclusionPattern.exec(text)) !== null) {
+      exclusions.push(match[1]);
+    }
+    
+    // Remove exclusion markers
+    let result = text.replace(/!([A-Za-z0-9_-]+)/g, '');
+    
+    // Remove conflicting tags
+    for (const exclusion of exclusions) {
+      const tagPattern = new RegExp(`\\b${exclusion}\\b`, 'gi');
+      result = result.replace(tagPattern, '');
+    }
+    
+    // Clean up extra spaces and commas
+    result = result.replace(/,\s*,/g, ',').replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/\s+/g, ' ');
+    
+    return result;
+  }
+
   function recursiveSwap(txt) {
     let current = txt;
     let iteration = 0;
@@ -167,6 +282,10 @@
       current = next;
       iteration++;
     }
+    
+    // Apply exclusion control after all expansions
+    current = removeExclusiveTags(current);
+    
     return current;
   }
   const deepSwap = o => {

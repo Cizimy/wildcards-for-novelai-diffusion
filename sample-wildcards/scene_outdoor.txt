@@ -1,0 +1,14 @@
+forest:3
+street:2
+beach:2
+park
+rooftop:2
+mountain:1.5
+cityscape:2
+countryside
+garden:2
+bridge
+river
+lake:1.5
+sky:0.5
+spacecraft exterior:0.3

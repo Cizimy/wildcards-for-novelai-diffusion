@@ -1,0 +1,13 @@
+bedroom
+office:2
+classroom
+kitchen:3
+bathroom
+living room:2
+library
+cafe:2
+restaurant
+traditional japanese room
+convenience store:0.5
+hospital
+school hallway

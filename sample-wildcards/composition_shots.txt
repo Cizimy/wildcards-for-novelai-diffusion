@@ -1,0 +1,43 @@
+profile:2
+profile, from above:1.5
+profile, from below:1.5
+profile, three quarter view:1
+portrait:3
+portrait, straight-on:2
+portrait, from above:1.5
+portrait, from side:1.5
+portrait, from below:1.5
+portrait, three quarter view:2
+upper body:3
+upper body, straight-on:2
+upper body, from above:2
+upper body, from side:2
+upper body, from below:1.5
+upper body, from behind:1.5
+upper body, three quarter view:2
+lower body:2
+lower body, straight-on:1.5
+lower body, from above:2
+lower body, from side:1.5
+lower body, from below:1
+lower body, from behind:1.5
+torso shot:2.5
+torso shot, straight-on:2
+torso shot, from above:1.5
+torso shot, from side:1.5
+torso shot, from below:1
+torso shot, from behind:1.5
+cowboy shot:2.5
+cowboy shot, straight-on:2
+cowboy shot, from above:1.5
+cowboy shot, from side:1.5
+cowboy shot, from below:1
+cowboy shot, from behind:1.5
+cowboy shot, three quarter view:1.5
+full body:2.5
+full body, straight-on:2
+full body, from above:1.5
+full body, from side:1.5
+full body, from below:1
+full body, from behind:1.5
+full body, three quarter view:1.5
