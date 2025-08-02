@@ -1,7 +1,6 @@
 // NovelAI Wildcards – popup.js
 const fileInput = document.getElementById('file');
 const list      = document.getElementById('list');
-const v3chk     = true; // document.getElementById('v3mode');
 
 fileInput.addEventListener('change', () => {
   const files = Array.from(fileInput.files);

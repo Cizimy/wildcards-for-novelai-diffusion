@@ -13,6 +13,7 @@ Works like a1111 webui's wildcards extension, and the wildcards txt files for a1
 |---|---|
 | **Wildcard replacement** | Detects `__name__` tokens anywhere in the JSON payload (including Character prompts). Replaces '\\\(' and '\\\)' to '(' and ')'.|
 | **Set your wildcards txt files** | Upload `.txt` wildcards. Files are not sent anywhere, just stored in local storage. Files can be added and deleted at extension menu.|
+| **Hierarchical Wildcards** | Supports resolving `__category/item__` style wildcards. The extension will search for `category/item`, then `category_item`, `category-item`, and finally `categoryitem`. Please be aware that using mixed separators (e.g., `__category/item_variant__`) might lead to unexpected matches. |
 | **Prompt replacement** | Converts lines to NovelAI’s original dynamic prompting syntax. |
 | **Supports Autocomplete** | Detects `__`  on text area, then autocompletes from your Wildcards txt files list. Autocomplete can be select via "space", "enter", "tab". ("enter" and "tab" key collides with NAI's own autocomplete, so "space" recommended)|
 | **Zero external calls** | All data lives in Chrome Storage; nothing ever leaves your browser. |

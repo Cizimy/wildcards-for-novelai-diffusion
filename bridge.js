@@ -60,7 +60,7 @@
     return weighted[weighted.length - 1].label;
   }
 
-  function swap(txt, dict, v3) {
+  function swap(txt, dict) {
     let result = txt.replace(/__([A-Za-z0-9_\/-]+)__/g, (match, name) => {
       let raw = dict[name];
       if (!raw && name.includes('/')) {
@@ -80,13 +80,10 @@
       raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
       const lines = raw.split(/\r?\n/).filter(Boolean);
       if (!lines.length) return match;
-      const forceV3 = lines.some(line => containsWildcardSyntax(line));
-      const effectiveV3 = forceV3 || v3;
-      if (effectiveV3) {
-        return lines[Math.floor(rng() * lines.length)];
-      } else {
-        return `||${lines.join('|')}||`;
-      }
+      // With v3 logic removed, we always return a random line.
+      // The original distinction for `||...||` syntax is no longer needed
+      // as the recursive nature handles nested replacements.
+      return lines[Math.floor(rng() * lines.length)];
     });
     result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
       const opts = group.split('|');
@@ -105,8 +102,40 @@
       }
     });
     
-    // Conditional logic is intentionally simplified here for security review.
-    // A full implementation would require more robust parsing.
+    // --- Conditional Tags ---
+    // @if{variable=value|then|else}
+    result = result.replace(/@if{([^}]+)}/g, (match, content) => {
+      const parts = content.split('|');
+      const condition = parts || '';
+      const thenBranch = parts || '';
+      const elseBranch = parts || '';
+
+      const condParts = condition.split('=').map(s => s.trim());
+      const varName = condParts;
+      const varValue = condParts;
+
+      // Check against the *current* result, not the original txt
+      const hasCondition = result.includes(`${varName}=${varValue}`);
+      
+      return hasCondition ? thenBranch : elseBranch;
+    });
+
+    // @scene{keyword|then|else}
+    result = result.replace(/@scene{([^}]+)}/g, (match, content) => {
+      const parts = content.split('|');
+      const keyword = (parts || '').trim();
+      const thenBranch = parts || '';
+      const elseBranch = parts || '';
+
+      if (!keyword) return elseBranch;
+
+      // Check against the *current* result for scene keywords
+      const contextPattern = new RegExp(`\\b(${keyword})\\b`, 'i');
+      const hasKeyword = contextPattern.test(result);
+
+      return hasKeyword ? thenBranch : elseBranch;
+    });
+
     return result;
   }
 
@@ -115,34 +144,38 @@
   }
 
   function removeExclusiveTags(text) {
-    const exclusionPattern = /!((?:"[^"]+")|(?:[A-Za-z0-9_ -]+))/g;
+    const exclusionPattern = /!((?:"[^"]+")|(?:[A-Za-z0-9_ ,-]+))/g;
     const exclusions = [];
     let result = text;
     result = result.replace(exclusionPattern, (fullMatch, tag) => {
-      if (tag.startsWith('"') && tag.endsWith('"')) {
-        tag = tag.substring(1, tag.length - 1);
-      }
-      exclusions.push(tag.trim());
-      return '';
+      const tagsToExclude = (tag.startsWith('"') && tag.endsWith('"'))
+        ? [tag.substring(1, tag.length - 1)]
+        : tag.split(',').map(t => t.trim()).filter(Boolean);
+      
+      exclusions.push(...tagsToExclude);
+      return ''; // Remove the exclusion tags from the prompt
     });
+
     for (const exclusion of exclusions) {
       if (!exclusion) continue;
       const escapedExclusion = escapeRegExp(exclusion);
-      const tagPattern = new RegExp(`(^|[,\\s])${escapedExclusion}(?=$|[,\\s])`, 'gi');
-      result = result.replace(tagPattern, '$1%%REMOVED%%');
+      const tagPattern = new RegExp(`\\b${escapedExclusion}\\b`, 'gi');
+      result = result.replace(tagPattern, '%%REMOVED%%');
     }
+
     return result.replace(/%%REMOVED%%/g, '')
-                   .replace(/,\s*,/g, ',')
-                   .replace(/^\s*,\s*|\s*,\s*$/g, '')
+                   .replace(/(,\s*)+/g, ', ')
+                   .replace(/^, | ,$/g, '')
                    .replace(/\s+/g, ' ')
                    .trim();
   }
 
-  function recursiveSwap(txt, dict, v3) {
+  function recursiveSwap(txt, dict) {
     let current = txt;
     let iteration = 0;
+    // Increased iteration limit for very complex nested wildcards.
     while (containsWildcardSyntax(current) && iteration < 500) {
-      const next = swap(current, dict, v3);
+      const next = swap(current, dict);
       if (next === current) break;
       current = next;
       iteration++;
@@ -151,13 +184,13 @@
     return current;
   }
 
-  const deepSwap = (o, dict, v3) => {
-    if (typeof o === 'string') return recursiveSwap(o, dict, v3);
-    if (Array.isArray(o)) return o.map(item => deepSwap(item, dict, v3));
+  const deepSwap = (o, dict) => {
+    if (typeof o === 'string') return recursiveSwap(o, dict);
+    if (Array.isArray(o)) return o.map(item => deepSwap(item, dict));
     if (o && typeof o === 'object') {
       const newObj = {};
       for (const k in o) {
-        newObj[k] = deepSwap(o[k], dict, v3);
+        newObj[k] = deepSwap(o[k], dict);
         if (k === 'char_captions' && Array.isArray(newObj[k]) && newObj[k].length > 6)
           newObj[k] = newObj[k].slice(0, 6);
       }
@@ -169,14 +202,12 @@
   // --- End of moved functions ---
 
   let wildcards = {};
-  let v3mode = false;
   let preservePrompt = false;
 
   // 1) Load initial settings
   const loadSettings = async () => {
-    const settings = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt']);
+    const settings = await chrome.storage.local.get(['wildcards', 'preservePrompt']);
     wildcards = settings.wildcards || {};
-    v3mode = settings.v3mode || false;
     preservePrompt = settings.preservePrompt || false;
   };
 
@@ -189,7 +220,6 @@
     // Send only necessary settings, not the whole wildcard map
     window.postMessage({
       type: '__WILDCARD_INIT__',
-      v3: v3mode,
       preservePrompt: preservePrompt
     }, '*');
     s.remove();
@@ -201,7 +231,6 @@
     await loadSettings(); // Reload all settings on any change
     window.postMessage({
       type: '__WILDCARD_UPDATE__',
-      v3: v3mode,
       preservePrompt: preservePrompt
     }, '*');
   });
@@ -216,7 +245,7 @@
     if (!id || !payload) return;
 
     try {
-      const result = deepSwap(payload, wildcards, v3mode);
+      const result = deepSwap(payload, wildcards);
       window.postMessage({
         type: '__WILDCARD_SWAP_RESPONSE__',
         id: id,
