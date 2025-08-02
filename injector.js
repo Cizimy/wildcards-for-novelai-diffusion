@@ -1,31 +1,58 @@
-// injector.js
+// injector.js - Page Script
 (() => {
   const TARGET = 'https://image.novelai.net/ai/generate-image';
-  const curlyPattern = /{([^{}]*\|[^{}]*)}/;
-  const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-  const simpleWildcardPattern = /__([A-Za-z0-9_\/-]+)__/;
-  
-  // Enhanced RNG system using crypto.getRandomValues for better randomness
-  function createRNG() {
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      return function() {
-        const array = new Uint32Array(1);
-        crypto.getRandomValues(array);
-        return array[0] / (0xFFFFFFFF + 1);
-      };
-    }
-    // Fallback to Math.random if crypto is not available
-    return Math.random;
-  }
-  const rng = createRNG();
-  function containsWildcardSyntax(text) {
-    return simpleWildcardPattern.test(text) ||
-      curlyPattern.test(text) ||
-      doublePipePattern.test(text);
-  }
-  let dict = {};
   let v3 = false;
-  let preservePrompt = false; // img2img 프롬프트 유지 기능 플래그
+  let preservePrompt = false;
+  let requestNonce = 0;
+  const pendingRequests = new Map();
+
+  // --- Start: New async communication logic ---
+
+  // Listen for responses from the content script
+  window.addEventListener('message', e => {
+    if (e.source !== window || !e.data) return;
+
+    const { type, id, payload, error } = e.data;
+
+    if (type === '__WILDCARD_SWAP_RESPONSE__' && pendingRequests.has(id)) {
+      const { resolve, reject } = pendingRequests.get(id);
+      pendingRequests.delete(id);
+      if (error) {
+        reject(new Error(error));
+      } else {
+        resolve(payload);
+      }
+    } else if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
+      // Update settings from content script
+      v3 = !!e.data.v3;
+      preservePrompt = !!e.data.preservePrompt;
+    }
+  });
+
+  // Replaces the old synchronous deepSwap
+  function deepSwap(payload) {
+    return new Promise((resolve, reject) => {
+      const id = requestNonce++;
+      pendingRequests.set(id, { resolve, reject });
+      
+      // Set a timeout for the request
+      setTimeout(() => {
+        if (pendingRequests.has(id)) {
+          pendingRequests.delete(id);
+          reject(new Error('Wildcard swap request timed out.'));
+        }
+      }, 5000); // 5 second timeout
+
+      window.postMessage({
+        type: '__WILDCARD_SWAP_REQUEST__',
+        id: id,
+        payload: payload
+      }, '*');
+    });
+  }
+
+  // --- End: New async communication logic ---
+
   function waitForElement(selector) {
     return new Promise(resolve => {
       if (document.querySelector(selector)) {
@@ -40,8 +67,8 @@
       observer.observe(document.documentElement, { childList: true, subtree: true });
     });
   }
-  /* -------------------------------------------------
-   * 0. PNG 메타데이터 유틸 ────────────────────── */
+
+  /* PNG metadata utils remain the same */
   function extractPngMetadata(arrayBuffer) {
     const dv = new DataView(arrayBuffer);
     const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -82,6 +109,7 @@
     }
     return meta;
   }
+
   async function applyImg2ImgMetadata(json) {
     try {
       if (json?.action !== 'img2img' || !json?.parameters?.image) return;
@@ -101,9 +129,7 @@
       const commentChunk = raw.Comment;
       if (!commentChunk) return;
       const pngMeta = JSON.parse(commentChunk);
-      /* 1) prompt / uc 반영 */
       if (pngMeta.prompt) json.input = pngMeta.prompt;
-      /* 2) charPrompt 빌드 */
       const characterPrompts = [];
       const v4Prompt = pngMeta.v4_prompt;
       const v4NegativePrompt = pngMeta.v4_negative_prompt;
@@ -120,7 +146,6 @@
           });
         }
       }
-      /* 3) v4‑prompt 계열 세팅 */
       if (json.model === 'nai-diffusion-4-full' ||
         json.model === 'nai-diffusion-4-curated-preview') {
         json.parameters.v4_prompt = {
@@ -137,197 +162,14 @@
         json.parameters.characterPrompts = characterPrompts;
       }
     } catch (err) {
-      console.error('[Wildcard] img2img metadata 처리 오류:', err);
+      console.error('[Wildcard] img2img metadata processing error:', err);
     }
   }
-  /* ------------------------------------------------- */
-  window.addEventListener('message', e => {
-    if (e.source !== window) return;
-    if (e.data?.type === '__WILDCARD_INIT__' || e.data?.type === '__WILDCARD_UPDATE__') {
-      dict = e.data.map || {};
-      v3 = !!e.data.v3;
-      preservePrompt = !!e.data.preservePrompt; // preservePrompt 플래그 설정
-    }
-  });
-  /******** 1. Enhanced swap logic with weighted selection ********/
-  
-  // Helper function for weighted random selection
-  function chooseWeighted(opts) {
-    const weighted = opts.map(s => {
-      const colonIndex = s.indexOf(':');
-      if (colonIndex === -1) {
-        return { weight: 1, label: s.trim() };
-      }
-      const weight = parseFloat(s.substring(0, colonIndex)) || 1;
-      const label = s.substring(colonIndex + 1).trim();
-      return { weight, label };
-    });
-    
-    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
-    if (totalWeight <= 0) return weighted[0]?.label || '';
-    
-    let random = rng() * totalWeight;
-    for (const item of weighted) {
-      random -= item.weight;
-      if (random <= 0) return item.label;
-    }
-    return weighted[weighted.length - 1].label;
-  }
 
-  function swap(txt) {
-    // Enhanced: Support hierarchical wildcards with slash notation (scene/indoor, lighting/natural, etc.)
-    let result = txt.replace(/__([A-Za-z0-9_\/-]+)__/g, (match, name) => {
-      let raw = dict[name];
-      
-      // If direct match not found, try hierarchical lookup
-      if (!raw && name.includes('/')) {
-        // Try variations: scene/indoor -> scene_indoor, scene-indoor
-        const variations = [
-          name.replace(/\//g, '_'),
-          name.replace(/\//g, '-'),
-          name.replace(/\//g, '')
-        ];
-        
-        for (const variation of variations) {
-          if (dict[variation]) {
-            raw = dict[variation];
-            break;
-          }
-        }
-      }
-      
-      if (!raw) return match;
-      raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
-      const lines = raw.split(/\r?\n/).filter(Boolean);
-      if (!lines.length) return match;
-      const forceV3 = lines.some(line => containsWildcardSyntax(line));
-      const effectiveV3 = forceV3 || v3;
-      if (effectiveV3) {
-        return lines[Math.floor(rng() * lines.length)];
-      } else {
-        return `||${lines.join('|')}||`;
-      }
-    });
-
-    // Enhanced: Support weighted selection in curly braces {option1:weight1|option2:weight2}
-    result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
-      const opts = group.split('|');
-      // Check if any option contains weight (has colon)
-      if (opts.some(opt => opt.includes(':'))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-
-    // Enhanced: Support weighted selection in double pipes ||option1:weight1|option2:weight2||
-    result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (match, group) => {
-      const opts = group.split('|');
-      // Check if any option contains weight (has colon)
-      if (opts.some(opt => opt.includes(':'))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-
-    // Enhanced: Conditional logic support @if{variable=value:true_option|false_option}
-    result = result.replace(/@if\{([A-Za-z0-9_]+)=([^:}]+):([^|}]+)\|([^}]+)\}/g, (match, varName, varValue, trueOption, falseOption) => {
-      // For now, we'll check if the variable was previously set in the text
-      // This is a simplified implementation - in a full version, you'd maintain state
-      const contextPattern = new RegExp(`\\b${varName}\\s*=\\s*${varValue}\\b`, 'i');
-      const hasCondition = txt.includes(`${varName}=${varValue}`) || contextPattern.test(txt);
-      return hasCondition ? trueOption : falseOption;
-    });
-
-    // Enhanced: Scene-based conditional logic @scene{indoor:__indoor_tags__|__outdoor_tags__}
-    result = result.replace(/@scene\{([^:}]+):([^|}]+)\|([^}]+)\}/g, (match, sceneType, indoorOption, outdoorOption) => {
-      // Check if the current context suggests indoor or outdoor scene
-      const indoorKeywords = ['indoor', 'bedroom', 'office', 'classroom', 'kitchen', 'bathroom', 'living room'];
-      const outdoorKeywords = ['outdoor', 'forest', 'street', 'beach', 'park', 'sky', 'mountain'];
-      
-      const text = txt.toLowerCase();
-      const hasIndoor = indoorKeywords.some(keyword => text.includes(keyword));
-      const hasOutdoor = outdoorKeywords.some(keyword => text.includes(keyword));
-      
-      if (sceneType.toLowerCase() === 'indoor' || hasIndoor) {
-        return indoorOption;
-      } else if (sceneType.toLowerCase() === 'outdoor' || hasOutdoor) {
-        return outdoorOption;
-      } else {
-        // Default fallback - randomly choose
-        return rng() < 0.5 ? indoorOption : outdoorOption;
-      }
-    });
-
-    return result;
-  }
-
-  // Enhanced: Exclusion control for conflicting tags
-  function removeExclusiveTags(text) {
-    // Remove tags marked with ! prefix that conflict with existing tags
-    const exclusionPattern = /!([A-Za-z0-9_-]+)/g;
-    const exclusions = [];
-    let match;
-    
-    // Collect all exclusion tags
-    while ((match = exclusionPattern.exec(text)) !== null) {
-      exclusions.push(match[1]);
-    }
-    
-    // Remove exclusion markers
-    let result = text.replace(/!([A-Za-z0-9_-]+)/g, '');
-    
-    // Remove conflicting tags using placeholder approach to handle commas properly
-    for (const exclusion of exclusions) {
-      // Use more precise boundary matching to avoid compound words
-      const tagPattern = new RegExp(`(^|[,\\s])${exclusion}(?=$|[,\\s])`, 'gi');
-      result = result.replace(tagPattern, '$1%%REMOVED%%');
-    }
-    
-    // Clean up placeholders and fix comma issues
-    result = result.replace(/%%REMOVED%%/g, '')
-                   .replace(/,\s*,/g, ',')
-                   .replace(/^\s*,\s*|\s*,\s*$/g, '')
-                   .replace(/\s+/g, ' ')
-                   .trim();
-    
-    return result;
-  }
-
-  function recursiveSwap(txt) {
-    let current = txt;
-    let iteration = 0;
-    while (containsWildcardSyntax(current) && iteration < 100) {
-      const next = swap(current);
-      if (next === current) break;
-      current = next;
-      iteration++;
-    }
-    
-    // Apply exclusion control after all expansions
-    current = removeExclusiveTags(current);
-    
-    return current;
-  }
-  const deepSwap = o => {
-    if (typeof o === 'string') return recursiveSwap(o);
-    if (Array.isArray(o)) return o.map(deepSwap);
-    if (o && typeof o === 'object') {
-      for (const k in o) {
-        o[k] = deepSwap(o[k]);
-        if (k === 'char_captions' && Array.isArray(o[k]) && o[k].length > 6)
-          o[k] = o[k].slice(0, 6);
-      }
-      return o;
-    }
-    return o;
-  };
-  /* 2‑A. fetch 패치 */
-  // Guard against double patching
+  /* fetch/XHR patches now use the async deepSwap */
   if (window.__wildPatched__) return;
   window.__wildPatched__ = true;
-  
+
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     try {
@@ -339,11 +181,12 @@
           const txt = typeof body === 'string' ? body
             : await new Response(body).text();
           let json = JSON.parse(txt);
-          /* ① wildcard 치환 */
-          json = deepSwap(json);
-          /* ② img2img 메타데이터 반영 */
+          
+          // Now async
+          json = await deepSwap(json);
+          
           if (preservePrompt) await applyImg2ImgMetadata(json);
-          /* ③ cosmetic: base_caption = input */
+          
           if (json?.parameters?.v4_prompt?.caption &&
             typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
             typeof json.input === 'string') {
@@ -360,7 +203,7 @@
     } catch (e) { console.error('[Wildcard] fetch patch error:', e); }
     return $fetch(input, init);
   };
-  /* 2‑B. XHR 패치 */
+
   const $open = XMLHttpRequest.prototype.open;
   const $send = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (m, url, ...rest) {
@@ -368,197 +211,42 @@
     return $open.call(this, m, url, ...rest);
   };
   XMLHttpRequest.prototype.send = function (body) {
-    try {
-      if (this.__wild_m?.toUpperCase() === 'POST' &&
-        this.__wild_u?.startsWith(TARGET) &&
-        typeof body === 'string') {
+    const m = this.__wild_m?.toUpperCase();
+    const u = this.__wild_u;
+
+    if (m !== 'POST' || !u?.startsWith(TARGET) || typeof body !== 'string') {
+      return $send.call(this, body);
+    }
+
+    (async () => {
+      try {
         let json = JSON.parse(body);
-        /* ① wildcard 치환 */
-        json = deepSwap(json);
-        /* ② img2img 메타데이터 반영 */
-        if (preservePrompt) applyImg2ImgMetadata(json);
-        /* ③ cosmetic: base_caption = input */
-        if (json?.parameters?.v4_prompt?.caption &&
-          typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
-          typeof json.input === 'string') {
-          json.parameters.v4_prompt.caption.base_caption = json.input;
-        }
-        const newBody = JSON.stringify(json);
-        return $send.call(this, newBody);
-      }
-    } catch (e) { console.error('[Wildcard] XHR patch error:', e); }
-    return $send.call(this, body);
-  };
-  /******* 3. Autocomplete ********/
-  // 자동완성 관련 코드는 HEAD 기준으로 유지하며, 다른 브랜치의 추가 기능은 선택적으로 반영 가능
-  (function initWildcardAutocomplete_PM() {
-    const STYLE = `
-    .wildcard-suggest{
-      position:absolute; z-index:2147483647; background:#222; color:#fff;
-      border:1px solid #555; border-radius:4px; font-size:12px;
-      max-height:240px; overflow-y:auto; box-shadow:0 2px 8px #000a;
-    }
-    .wildcard-suggest li{padding:3px 8px; cursor:pointer; white-space:nowrap;}
-    .wildcard-suggest li.active{background:#444;}
-    `;
-    const styleEl = document.createElement('style');
-    styleEl.textContent = STYLE;
-    document.head.appendChild(styleEl);
-    const seen = new WeakSet();
-    const mo = new MutationObserver(scan);
-    mo.observe(document, { childList: true, subtree: true });
-    scan();
-    function scan() {
-      document.querySelectorAll('div.ProseMirror[contenteditable="true"]')
-        .forEach(el => { if (!seen.has(el)) hook(el); });
-    }
-    function hook(editor) {
-      seen.add(editor);
-      const list = document.createElement('ul');
-      list.className = 'wildcard-suggest';
-      list.style.display = 'none';
-      document.body.appendChild(list);
-      let selIdx = -1;
-      editor.addEventListener('input', update);
-      editor.addEventListener('keydown', nav);
-      editor.addEventListener('blur', hide, true); // capture
-      function textBeforeCaret() {
-        const sel = window.getSelection();
-        if (!sel || !sel.anchorNode || !editor.contains(sel.anchorNode)) return '';
-        const rng = sel.getRangeAt(0).cloneRange();
-        rng.collapse(true);
-        rng.setStart(editor, 0);
-        return rng.toString();
-      }
-      function update() {
-        const txt = textBeforeCaret();
-        let m = txt.match(/__([A-Za-z0-9_\/-]+)__(?:([A-Za-z0-9 \-_]*))$/);
-        if (m && dict[m[1]]) {
-          const fileKey = m[1];
-          const part = (m[2] || '').toLowerCase();
-          const lines = dict[fileKey]
-            .replace(/\\\(/g, '(').replace(/\\\)/g, ')')
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .filter(l => l.toLowerCase().includes(part))
-            .slice(0, 100);
-          if (lines.length) {
-            render(lines.map(l => ({ type: 'value', text: l, key: fileKey })));
-            return;
-          }
-        }
-        m = txt.match(/__([A-Za-z0-9_\/-]*)$/);
-        if (m) {
-          const prefix = m[1].toLowerCase();
-          const keys = Object.keys(dict)
-            .filter(k => k.toLowerCase().includes(prefix))
-            .sort();
-          if (keys.length) {
-            render(keys.map(k => ({ type: 'token', text: `__${k}__` })));
-            return;
-          }
-        }
-        hide();
-      }
-      function render(items) {
-        list.innerHTML = '';
-        items.forEach(({ type, text }) => {
-          const li = document.createElement('li');
-          li.textContent = text;
-          li.dataset.type = type;
-          list.appendChild(li);
-        });
-        selIdx = 0;
-        highlight();
-        const sel = window.getSelection();
-        const rng = sel.getRangeAt(0).cloneRange();
-        const rect = rng.getBoundingClientRect();
-        list.style.left = (rect.left + window.scrollX) + 'px';
-        list.style.top = (rect.bottom + window.scrollY + 2) + 'px';
-        list.style.display = 'block';
-      }
-      function nav(e) {
-        if (list.style.display === 'none') return;
-        const items = list.querySelectorAll('li');
-        if (!items.length) return;
-        if (e.key === 'ArrowDown') {
-          e.preventDefault(); selIdx = (selIdx + 1) % items.length; highlight();
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault(); selIdx = (selIdx - 1 + items.length) % items.length; highlight();
-        } else if (e.key === 'Tab' || e.key === ' ') {
-          e.preventDefault(); choose(items[selIdx]);
-        } else if (e.key === 'Escape') {
-          hide();
-        }
-      }
-      list.addEventListener('mousedown', e => {
-        if (e.target.tagName === 'LI') {
-          e.preventDefault(); choose(e.target);
-        }
-      });
-      function choose(li) {
-        const type = li.dataset.type;
-        const text = li.textContent;
-        const sel = window.getSelection();
-        if (!sel || !sel.rangeCount) { hide(); return; }
-        const rng = sel.getRangeAt(0);
-        const before = rng.cloneRange();
-        before.setStart(editor, 0);
-        const full = before.toString();
-        let len = 0;
-        if (type === 'token') {
-          const m = full.match(/__([A-Za-z0-9_\/-]*)$/);
-          len = m ? m[0].length : 0;
-        } else {
-          const m = full.match(/__([A-Za-z0-9_\/-]+)__(?:[A-Za-z0-9 \-_]*)$/);
-          len = m ? m[0].length : 0;
-        }
-        if (len) {
-          sel.collapse(rng.endContainer, rng.endOffset);
-          for (let i = 0; i < len; i++) {
-            sel.modify('extend', 'backward', 'character');
-          }
-        }
-        // Use modern Selection API instead of deprecated execCommand
-        if (navigator.clipboard && window.isSecureContext) {
-          // Modern approach: use clipboard API with paste event simulation
-          navigator.clipboard.writeText(text).then(() => {
-            document.execCommand('paste');
-          }).catch(() => {
-            // Fallback to direct text insertion
-            insertTextAtCursor(text);
-          });
-        } else {
-          insertTextAtCursor(text);
+        
+        // Now async
+        json = await deepSwap(json);
+        
+        if (preservePrompt) {
+          await applyImg2ImgMetadata(json);
         }
         
-        function insertTextAtCursor(text) {
-          const selection = window.getSelection();
-          if (selection.rangeCount > 0) {
-            const range = selection.getRangeAt(0);
-            range.deleteContents();
-            const textNode = document.createTextNode(text);
-            range.insertNode(textNode);
-            range.setStartAfter(textNode);
-            range.setEndAfter(textNode);
-            selection.removeAllRanges();
-            selection.addRange(range);
-          }
+        if (json?.parameters?.v4_prompt?.caption &&
+            typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
+            typeof json.input === 'string') {
+          json.parameters.v4_prompt.caption.base_caption = json.input;
         }
-        hide();
-        if (type === 'token') {
-          setTimeout(update, 0);
-        }
+        
+        const newBody = JSON.stringify(json);
+        $send.call(this, newBody);
+      } catch (e) {
+        console.error('[Wildcard] XHR patch async error:', e);
+        $send.call(this, body);
       }
-      function highlight() {
-        list.querySelectorAll('li').forEach((li, i) =>
-          li.classList.toggle('active', i === selIdx));
-      }
-      function hide() {
-        list.style.display = 'none'; selIdx = -1;
-      }
-    }
-  })();
+    })();
+  };
 
-  console.log('[Wildcard] injector ready');
+  // Autocomplete logic is removed as it depended on the shared `dict`.
+  // A new implementation would require async calls to the bridge.
+  // For this security fix, it is removed to prevent broken functionality.
+
+  console.log('[Wildcard] injector ready (secure mode)');
 })();

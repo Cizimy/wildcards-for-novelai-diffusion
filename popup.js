@@ -34,28 +34,31 @@ function refresh() {
     const map = d.wildcards || {};
     list.innerHTML = '';
 
-    const delAll = document.createElement('button');
-    delAll.textContent = 'delete all';
-    delAll.style.float = 'right';
-    delAll.style.marginRight = '0px';
-    delAll.style.marginTop = '-25px';
-    delAll.onclick = () => {
-      if (!confirm('Are you sure you want to delete all wildcards?')) return;
-      chrome.storage.local.set({ wildcards: {} }, refresh);
-    };
-    if (Object.keys(map).length) {
-      delAll.style.display = 'block';
-    } else {
-      delAll.style.display = 'none';
+    const oldBtn = document.getElementById('del-all-btn-container');
+    if(oldBtn) oldBtn.remove();
+
+    if (Object.keys(map).length > 0) {
+      const buttonContainer = document.createElement('div');
+      buttonContainer.id = 'del-all-btn-container';
+      buttonContainer.style.textAlign = 'right';
+      buttonContainer.style.marginBottom = '10px';
+
+      const delAll = document.createElement('button');
+      delAll.textContent = 'delete all';
+      delAll.onclick = () => {
+        if (!confirm('Are you sure you want to delete all wildcards?')) return;
+        chrome.storage.local.set({ wildcards: {} }, refresh);
+      };
+      buttonContainer.appendChild(delAll);
+      list.parentNode.insertBefore(buttonContainer, list);
     }
-    list.appendChild(delAll);
 
     // Enhanced: Group wildcards by hierarchy and display them organized
     const groupedWildcards = {};
     
     Object.keys(map).forEach(name => {
       // Use original key format for both storage and display
-      const parts = name.split(/[_-]/);
+      const parts = name.split(/[\/_-]/);
       
       if (parts.length > 1) {
         const category = parts[0];
