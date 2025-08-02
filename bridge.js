@@ -21,7 +21,8 @@
   function containsWildcardSyntax(text) {
     if (typeof text !== 'string') return false;
     return simpleWildcardPattern.test(text) ||
-      curlyPattern.test(text) ||
+      text.includes('@if{') ||
+      /(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/.test(text) ||
       doublePipePattern.test(text);
   }
 
@@ -60,97 +61,98 @@
     return weighted[weighted.length - 1].label;
   }
 
-  function swap(txt, dict, context) {
-    let result = txt.replace(/__([A-Za-z0-9_\/-]+)__/g, (match, name) => {
-      let raw = dict[name];
-      if (!raw && name.includes('/')) {
-        const variations = [
-          name.replace(/\//g, '_'),
-          name.replace(/\//g, '-'),
-          name.replace(/\//g, '')
-        ];
-        for (const variation of variations) {
-          if (dict[variation]) {
-            raw = dict[variation];
-            break;
-          }
+  function parseIf(text, context) {
+      const parts = [];
+      let balance = 0;
+      let lastIndex = 0;
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] === '{') balance++;
+        if (text[i] === '}') balance--;
+        if (text[i] === '|' && balance === 0) {
+          parts.push(text.substring(lastIndex, i));
+          lastIndex = i + 1;
         }
       }
-      if (!raw) return match;
-      raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
-      const lines = raw.split(/\r?\n/).filter(Boolean);
-      if (!lines.length) return match;
-      // With v3 logic removed, we always return a random line.
-      // The original distinction for `||...||` syntax is no longer needed
-      // as the recursive nature handles nested replacements.
-      return lines[Math.floor(rng() * lines.length)];
-    });
-    // --- Conditional Tags ---
-    // @if{variable=value|then|else}
-    result = result.replace(/@if{([^}]+)}/g, (match, content) => {
-      const [conditionSpec, thenBranch = '', elseBranch = ''] = content.split('|');
+      parts.push(text.substring(lastIndex));
+      const [conditionSpec, thenBranch = '', elseBranch = ''] = parts;
       const conditionParts = conditionSpec.split(':');
-
-      // Legacy @if{variable=value} support
       if (conditionParts.length === 1) {
         const [varName, varValue = ''] = conditionSpec.split('=').map(s => s.trim());
         if (!varName) return elseBranch;
-
-        // FIX: To prevent infinite loops, check against a string that *excludes* the current match.
-        const checkString = result.replace(match, '');
+        const checkString = context.prompt.replace(`@if{${text}}`, '');
         const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
         return conditionRe.test(checkString) ? thenBranch : elseBranch;
       }
-
-      // New @if{scope:condition} syntax
       const [scope, condition] = conditionParts;
       const targetText = getPropertyByScope(context, scope);
-
       if (typeof targetText !== 'string') {
-        return elseBranch; // Scope not found or not a string
+        return elseBranch;
       }
-
       const isNegation = condition.startsWith('!');
       const keyword = isNegation ? condition.substring(1) : condition;
       const keywordPattern = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i');
       const hasKeyword = keywordPattern.test(targetText);
-
       const conditionMet = isNegation ? !hasKeyword : hasKeyword;
       return conditionMet ? thenBranch : elseBranch;
-    });
+  }
 
-    // @scene{keyword|then|else}
-    result = result.replace(/@scene{([^}]+)}/g, (match, content) => {
-      const [keyword, thenBranch = '', elseBranch = ''] = content.split('|').map(s => s.trim());
+  function swap(txt, dict, context) {
+    let result = txt;
 
-      if (!keyword) {
-        return elseBranch;
-      }
+    if (simpleWildcardPattern.test(result)) {
+        return result.replace(simpleWildcardPattern, (match, name) => {
+            let raw = dict[name];
+            if (!raw && name.includes('/')) {
+                const variations = [name.replace(/\//g, '_'), name.replace(/\//g, '-'), name.replace(/\//g, '')];
+                for (const variation of variations) {
+                    if (dict[variation]) {
+                        raw = dict[variation];
+                        break;
+                    }
+                }
+            }
+            if (!raw) return match;
+            raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
+            const lines = raw.split(/\r?\n/).filter(Boolean);
+            if (!lines.length) return match;
+            return lines[Math.floor(rng() * lines.length)];
+        });
+    }
 
-      // Check against the *current* result for scene keywords
-      const contextPattern = new RegExp(`\\b(${escapeRegExp(keyword)})\\b`, 'i');
-      const hasKeyword = contextPattern.test(result);
+    const ifIndex = result.indexOf('@if{');
+    if (ifIndex !== -1) {
+        let balance = 1;
+        let endIndex = -1;
+        for (let i = ifIndex + 4; i < result.length; i++) {
+            if (result[i] === '{') balance++;
+            if (result[i] === '}') balance--;
+            if (balance === 0) {
+                endIndex = i;
+                break;
+            }
+        }
+        if (endIndex !== -1) {
+            const match = result.substring(ifIndex, endIndex + 1);
+            const content = result.substring(ifIndex + 4, endIndex);
+            const replacement = parseIf(content, context);
+            return result.replace(match, replacement);
+        }
+    }
 
-      return hasKeyword ? thenBranch : elseBranch;
-    });
+    if (/(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/.test(result)) {
+        return result.replace(/(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/, (match, group) => {
+            const opts = group.split('|');
+            return opts.some(opt => /(?<!\\):/.test(opt)) ? chooseWeighted(opts) : opts[Math.floor(rng() * opts.length)];
+        });
+    }
 
-    result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
-      const opts = group.split('|');
-      if (opts.some(opt => /(?<!\\):/.test(opt))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-    result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (match, group) => {
-      const opts = group.split('|');
-      if (opts.some(opt => /(?<!\\):/.test(opt))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-
+    if (doublePipePattern.test(result)) {
+        return result.replace(doublePipePattern, (match, group) => {
+            const opts = group.split('|');
+            return opts.some(opt => /(?<!\\):/.test(opt)) ? chooseWeighted(opts) : opts[Math.floor(rng() * opts.length)];
+        });
+    }
+    
     return result;
   }
 
@@ -168,7 +170,7 @@
         : tag.split(',').map(t => t.trim()).filter(Boolean);
       
       exclusions.push(...tagsToExclude);
-      return ''; // Remove the exclusion tags from the prompt
+      return '';
     });
 
     for (const exclusion of exclusions) {
@@ -179,9 +181,6 @@
     }
 
     const cleaned = result.replace(/%%REMOVED%%/g, '');
-    // The split/map/filter/join approach is generally robust.
-    // To address the review's concern about edge cases, we add a more aggressive
-    // regex cleanup pass before the final join.
     const veryCleaned = cleaned.replace(/,\s*(,|$)/g, '$1').trim().replace(/^,|,$/g, '');
     const parts = veryCleaned.split(',')
                          .map(s => s.trim())
@@ -194,12 +193,11 @@
     let iteration = 0;
     const history = new Set([current]);
 
-    // Increased iteration limit for very complex nested wildcards.
     while (containsWildcardSyntax(current) && iteration < 100) {
       const next = swap(current, dict, context);
-      if (next === current) break;
-
-      // FIX: Detect cyclic loops by checking if we've seen the next state before.
+      if (next === current) {
+        break;
+      }
       if (history.has(next)) {
         console.warn(`[Wildcard] Infinite loop detected. Breaking. History:`, Array.from(history));
         break;
@@ -229,15 +227,13 @@
   };
 
   function getPropertyByScope(obj, scope) {
-    // Prefer top-level property if it exists (like 'input')
     if (typeof obj[scope] !== 'undefined') {
       return obj[scope];
     }
-    // Fallback to checking inside 'parameters' (like 'uc')
     if (obj?.parameters && typeof obj.parameters[scope] !== 'undefined') {
       return obj.parameters[scope];
     }
-    return undefined; // Explicitly return undefined if not found
+    return undefined;
   }
 
   // --- End of moved functions ---
@@ -245,7 +241,6 @@
   let wildcards = {};
   let preservePrompt = false;
 
-  // 1) Load initial settings
   const loadSettings = async () => {
     const settings = await chrome.storage.local.get(['wildcards', 'preservePrompt']);
     wildcards = settings.wildcards || {};
@@ -254,11 +249,9 @@
 
   await loadSettings();
 
-  // 2) Inject the page script
   const s = document.createElement('script');
   s.src = chrome.runtime.getURL('injector.js');
   s.onload = () => {
-    // Send only necessary settings, not the whole wildcard map
     window.postMessage({
       type: '__WILDCARD_INIT__',
       preservePrompt: preservePrompt
@@ -267,16 +260,14 @@
   };
   (document.head || document.documentElement).appendChild(s);
 
-  // 3) Listen for setting changes
   chrome.storage.onChanged.addListener(async (changes) => {
-    await loadSettings(); // Reload all settings on any change
+    await loadSettings();
     window.postMessage({
       type: '__WILDCARD_UPDATE__',
       preservePrompt: preservePrompt
     }, '*');
   });
 
-  // 4) Listen for swap requests from the page script
   window.addEventListener('message', e => {
     if (e.source !== window || !e.data || e.data.type !== '__WILDCARD_SWAP_REQUEST__') {
       return;
