@@ -20,10 +20,13 @@
 
   function containsWildcardSyntax(text) {
     if (typeof text !== 'string') return false;
-    return simpleWildcardPattern.test(text) ||
+    return (
+      simpleWildcardPattern.test(text) ||
       text.includes('@if{') ||
+      /!\~\([^)]*\)/.test(text) || // Exclusion syntax !~(tag)
       /(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/.test(text) ||
-      doublePipePattern.test(text);
+      doublePipePattern.test(text)
+    );
   }
 
   function chooseWeighted(opts) {
@@ -161,31 +164,30 @@
   }
 
   function removeExclusiveTags(text) {
-    const exclusionPattern = /!((?:"[^"]+")|(?:[\w./-]+(?:,\s*[\w./-]+)*))/g;
-    const exclusions = [];
     let result = text;
-    result = result.replace(exclusionPattern, (fullMatch, tag) => {
-      const tagsToExclude = (tag.startsWith('"') && tag.endsWith('"'))
-        ? [tag.substring(1, tag.length - 1)]
-        : tag.split(',').map(t => t.trim()).filter(Boolean);
-      
-      exclusions.push(...tagsToExclude);
-      return '';
+    const exclusionSyntaxPattern = /!\~\(([^)]*)\)/g;
+    const tagsToRemove = [];
+
+    // First, find all !~(tags) and mark them for removal
+    result = result.replace(exclusionSyntaxPattern, (match, tagContent) => {
+      const innerTags = tagContent.split(',').map(t => t.trim()).filter(Boolean);
+      tagsToRemove.push(...innerTags);
+      return ''; // Remove the !~(...) syntax itself
     });
 
-    for (const exclusion of exclusions) {
-      if (!exclusion) continue;
-      const escapedExclusion = escapeRegExp(exclusion);
-      const tagPattern = new RegExp(`\\b${escapedExclusion}\\b`, 'gi');
-      result = result.replace(tagPattern, '%%REMOVED%%');
+    // Remove the collected tags from the prompt
+    for (const tag of tagsToRemove) {
+      const escapedTag = escapeRegExp(tag);
+      // This regex ensures we match whole words/tags, and handles surrounding commas and spaces
+      const tagPattern = new RegExp(`\\s*,?\\s*\\b${escapedTag}\\b\\s*,?`, 'gi');
+      result = result.replace(tagPattern, ',');
     }
 
-    const cleaned = result.replace(/%%REMOVED%%/g, '');
-    const veryCleaned = cleaned.replace(/,\s*(,|$)/g, '$1').trim().replace(/^,|,$/g, '');
-    const parts = veryCleaned.split(',')
-                         .map(s => s.trim())
-                         .filter(Boolean);
-    return parts.join(', ');
+    // Final cleanup of the string
+    return result.split(/\s*,\s*/)
+                 .map(s => s.trim())
+                 .filter(Boolean)
+                 .join(', ');
   }
 
   function recursiveSwap(txt, dict, context) {
