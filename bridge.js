@@ -64,7 +64,7 @@
     return weighted[weighted.length - 1].label;
   }
 
-  function parseIf(text, context) {
+  function parseIf(text, context, matchText) {
       const parts = [];
       let balance = 0;
       let lastIndex = 0;
@@ -82,12 +82,16 @@
       if (conditionParts.length === 1) {
         const [varName, varValue = ''] = conditionSpec.split('=').map(s => s.trim());
         if (!varName) return elseBranch;
-        const checkString = context.prompt.replace(`@if{${text}}`, '');
+        const checkString = (context.prompt || '').replace(matchText, '');
         const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
         return conditionRe.test(checkString) ? thenBranch : elseBranch;
       }
       const [scope, condition] = conditionParts;
-      const targetText = getPropertyByScope(context, scope);
+      let targetText = getPropertyByScope(context, scope);
+      // The same @if expression is included in the evaluation target, which causes an incorrect condition determination, so it is excluded.
+      if (typeof targetText === 'string') {
+        targetText = targetText.replace(matchText, '');
+      }
       if (typeof targetText !== 'string') {
         return elseBranch;
       }
@@ -122,24 +126,16 @@
         });
     }
 
-    const ifIndex = result.indexOf('@if{');
-    if (ifIndex !== -1) {
-        let balance = 1;
-        let endIndex = -1;
-        for (let i = ifIndex + 4; i < result.length; i++) {
-            if (result[i] === '{') balance++;
-            if (result[i] === '}') balance--;
-            if (balance === 0) {
-                endIndex = i;
-                break;
-            }
-        }
-        if (endIndex !== -1) {
-            const match = result.substring(ifIndex, endIndex + 1);
-            const content = result.substring(ifIndex + 4, endIndex);
-            const replacement = parseIf(content, context);
-            return result.replace(match, replacement);
-        }
+    // Use a regex that can handle nested braces to some extent, but not infinitely.
+    // This is a limitation but better than the previous implementation.
+    const ifPattern = /@if{((?:[^{}]|{(?:[^{}]|{[^{}]*})*})*?)}/;
+    const ifMatch = result.match(ifPattern);
+
+    if (ifMatch) {
+        const wholeMatch = ifMatch[0];
+        const content = ifMatch[1];
+        const replacement = parseIf(content, context, wholeMatch);
+        return result.replace(wholeMatch, replacement);
     }
 
     if (/(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/.test(result)) {
@@ -163,40 +159,117 @@
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function removeExclusiveTags(text) {
-    let result = text;
-    const exclusionSyntaxPattern = /!\~\(([^)]*)\)/g;
-    const tagsToRemove = [];
+function removeExclusiveTags(text) {
+  // 1) すべての !~(...) を収集
+  const tagGroups = [...text.matchAll(/!\~\(([^)]*)\)/g)];
+  if (tagGroups.length === 0) return text;
 
-    // First, find all !~(tags) and mark them for removal
-    result = result.replace(exclusionSyntaxPattern, (match, tagContent) => {
-      const innerTags = tagContent.split(',').map(t => t.trim()).filter(Boolean);
-      tagsToRemove.push(...innerTags);
-      return ''; // Remove the !~(...) syntax itself
-    });
+  // 2) キャプチャ m[1] からタグを取り出す
+  const tags = tagGroups.flatMap(m =>
+    m[1]                      // "dog, cat" などキャプチャ部分
+      .split(',')             // カンマで区切る
+      .map(t => t.trim())     // 前後空白を除去
+      .filter(Boolean)        // 空文字を除去
+  );
 
-    // Remove the collected tags from the prompt
-    for (const tag of tagsToRemove) {
-      const escapedTag = escapeRegExp(tag);
-      // This regex ensures we match whole words/tags, and handles surrounding commas and spaces
-      const tagPattern = new RegExp(`\\s*,?\\s*\\b${escapedTag}\\b\\s*,?`, 'gi');
-      result = result.replace(tagPattern, ',');
+  // 3) 全 !~(...) をテキストから除去
+  let stripped = text.replace(/!\~\([^)]*\)/g, '');
+
+  // 4) "," または "and" でセグメント分割
+  const segments = stripped.split(/,\s*|\s+and\s+/i);
+
+  // 5) 各セグメントに除外タグが含まれていれば捨てる
+  const kept = segments
+    .filter(seg =>
+      !tags.some(tag => new RegExp(`\\b${escapeRegExp(tag)}\\b`, 'i').test(seg))
+    )
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  // 6) 再結合して後始末
+  return kept
+    .join(', ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[,\.]\s*$/, '');
+}
+
+// ユーティリティ: 正規表現用に特殊文字をエスケープ
+function collectTokens(text) {
+  if (!text) return [];
+  const regex = /(@if{[^{}]*})|(__[A-Za-z0-9_\/-]+__)|({[^{}]*\|[^{}]*})/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
     }
-
-    // Final cleanup of the string
-    return result.split(/\s*,\s*/)
-                 .map(s => s.trim())
-                 .filter(Boolean)
-                 .join(', ');
+    parts.push(match[0]); // PUSH THE MATCHED STRING
+    lastIndex = regex.lastIndex;
   }
 
-  function recursiveSwap(txt, dict, context) {
-    let current = txt;
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : [text];
+}
+
+  function expandWithRules(tokens, wildcards, rules = {}) {
+    // rules are ignored for now (Task 2.2)
+    const expanded = tokens.map(tokenObj => {
+      const token = Array.isArray(tokenObj) ? tokenObj : tokenObj;
+
+      // This is a simplified expansion that only handles wildcards and choices.
+      // It does not handle @if or !~() syntax, which will be handled by the main recursiveSwap loop for now.
+      
+      const simpleWildcardMatch = token.match(simpleWildcardPattern);
+      if (simpleWildcardMatch) {
+          const name = simpleWildcardMatch[1]; // Use captured group
+          let raw = wildcards[name];
+          if (!raw && name.includes('/')) {
+              const variations = [name.replace(/\//g, '_'), name.replace(/\//g, '-'), name.replace(/\//g, '')];
+              for (const variation of variations) {
+                  if (wildcards[variation]) {
+                      raw = wildcards[variation];
+                      break;
+                  }
+              }
+          }
+          if (!raw) return token;
+          raw = raw.replace(/\\\(/g, '(').replace(/\\\)/g, ')');
+          const lines = raw.split(/\r?\n/).filter(Boolean);
+          if (!lines.length) return token;
+          return lines[Math.floor(rng() * lines.length)];
+      }
+
+      const choiceMatch = token.match(/(?<!@if){([^|{}]+(?:\|[^|{}]+)+)}/);
+      if (choiceMatch) {
+          const group = choiceMatch[1]; // Use captured group
+          const opts = group.split('|');
+          return opts.some(opt => /(?<!\\):/.test(opt)) ? chooseWeighted(opts) : opts[Math.floor(rng() * opts.length)];
+      }
+      
+      return token;
+    });
+
+    return expanded.join('');
+  }
+
+  function recursiveSwap(txt, options) {
+    const { wildcards, context } = options;
+    const tokens = collectTokens(txt);
+    let expanded = expandWithRules(tokens, wildcards);
+
+    // The main loop now handles more complex syntax like @if and !~()
+    // that were not handled by the initial expandWithRules.
+    let current = expanded;
     let iteration = 0;
     const history = new Set([current]);
 
     while (containsWildcardSyntax(current) && iteration < 100) {
-      const next = swap(current, dict, context);
+      const next = swap(current, wildcards, context);
       if (next === current) {
         break;
       }
@@ -213,13 +286,15 @@
     return current;
   }
 
-  const deepSwap = (o, dict, context) => {
-    if (typeof o === 'string') return recursiveSwap(o, dict, context);
-    if (Array.isArray(o)) return o.map(item => deepSwap(item, dict, context));
+  const deepSwap = (o, options) => {
+    if (typeof o === 'string') return recursiveSwap(o, options);
+    if (Array.isArray(o)) return o.map(item => deepSwap(item, options));
     if (o && typeof o === 'object') {
       const newObj = {};
       for (const k in o) {
-        newObj[k] = deepSwap(o[k], dict, context);
+        // Pass the full object 'o' as context for each level
+        const newOptions = { wildcards: options.wildcards, context: o };
+        newObj[k] = deepSwap(o[k], newOptions);
         if (k === 'char_captions' && Array.isArray(newObj[k]) && newObj[k].length > 6)
           newObj[k] = newObj[k].slice(0, 6);
       }
@@ -254,6 +329,24 @@
   }
 
   // --- End of moved functions ---
+  // --- For testing purposes ---
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      createRNG,
+      containsWildcardSyntax,
+      chooseWeighted,
+      parseIf,
+      swap,
+      escapeRegExp,
+      removeExclusiveTags,
+      recursiveSwap,
+      deepSwap,
+      getPropertyByScope,
+      collectTokens,
+      expandWithRules,
+    };
+    return; // Prevent rest of the script from running in test env
+  }
 
   let wildcards = {};
   let preservePrompt = false;
@@ -294,7 +387,8 @@
     if (typeof id === 'undefined' || !payload) return;
 
     try {
-      const result = deepSwap(payload, wildcards, payload);
+      const options = { wildcards: wildcards, context: payload };
+      const result = deepSwap(payload, options);
       window.postMessage({
         type: '__WILDCARD_SWAP_RESPONSE__',
         id: id,
