@@ -60,7 +60,7 @@
     return weighted[weighted.length - 1].label;
   }
 
-  function swap(txt, dict) {
+  function swap(txt, dict, context) {
     let result = txt.replace(/__([A-Za-z0-9_\/-]+)__/g, (match, name) => {
       let raw = dict[name];
       if (!raw && name.includes('/')) {
@@ -105,18 +105,32 @@
     // --- Conditional Tags ---
     // @if{variable=value|then|else}
     result = result.replace(/@if{([^}]+)}/g, (match, content) => {
-      const [cond, thenBranch = '', elseBranch = ''] = content.split('|');
-      const [varName, varValue = ''] = cond.split('=').map(s => s.trim());
+      const [conditionSpec, thenBranch = '', elseBranch = ''] = content.split('|');
+      const conditionParts = conditionSpec.split(':');
 
-      if (!varName) {
-        return elseBranch;
+      // Legacy @if{variable=value} support
+      if (conditionParts.length === 1) {
+        const [varName, varValue = ''] = conditionSpec.split('=').map(s => s.trim());
+        if (!varName) return elseBranch;
+        const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
+        return conditionRe.test(result) ? thenBranch : elseBranch;
       }
 
-      // Check against the *current* result, not the original txt
-      const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
-      const hasCondition = conditionRe.test(result);
-      
-      return hasCondition ? thenBranch : elseBranch;
+      // New @if{scope:condition} syntax
+      const [scope, condition] = conditionParts;
+      const targetText = getPropertyByScope(context, scope);
+
+      if (typeof targetText !== 'string') {
+        return elseBranch; // Scope not found or not a string
+      }
+
+      const isNegation = condition.startsWith('!');
+      const keyword = isNegation ? condition.substring(1) : condition;
+      const keywordPattern = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i');
+      const hasKeyword = keywordPattern.test(targetText);
+
+      const conditionMet = isNegation ? !hasKeyword : hasKeyword;
+      return conditionMet ? thenBranch : elseBranch;
     });
 
     // @scene{keyword|then|else}
@@ -172,12 +186,12 @@
     return parts.join(', ');
   }
 
-  function recursiveSwap(txt, dict) {
+  function recursiveSwap(txt, dict, context) {
     let current = txt;
     let iteration = 0;
     // Increased iteration limit for very complex nested wildcards.
     while (containsWildcardSyntax(current) && iteration < 100) {
-      const next = swap(current, dict);
+      const next = swap(current, dict, context);
       if (next === current) break;
       current = next;
       iteration++;
@@ -186,13 +200,13 @@
     return current;
   }
 
-  const deepSwap = (o, dict) => {
-    if (typeof o === 'string') return recursiveSwap(o, dict);
-    if (Array.isArray(o)) return o.map(item => deepSwap(item, dict));
+  const deepSwap = (o, dict, context) => {
+    if (typeof o === 'string') return recursiveSwap(o, dict, context);
+    if (Array.isArray(o)) return o.map(item => deepSwap(item, dict, context));
     if (o && typeof o === 'object') {
       const newObj = {};
       for (const k in o) {
-        newObj[k] = deepSwap(o[k], dict);
+        newObj[k] = deepSwap(o[k], dict, context);
         if (k === 'char_captions' && Array.isArray(newObj[k]) && newObj[k].length > 6)
           newObj[k] = newObj[k].slice(0, 6);
       }
@@ -200,6 +214,12 @@
     }
     return o;
   };
+
+  function getPropertyByScope(obj, scope) {
+    // Simple key access for now. Can be expanded for nested access later.
+    // e.g., 'prompt', 'uc', 'sampler_options.seed'
+    return obj[scope];
+  }
 
   // --- End of moved functions ---
 
@@ -247,7 +267,7 @@
     if (!id || !payload) return;
 
     try {
-      const result = deepSwap(payload, wildcards);
+      const result = deepSwap(payload, wildcards, payload);
       window.postMessage({
         type: '__WILDCARD_SWAP_RESPONSE__',
         id: id,

@@ -60,7 +60,7 @@ function refresh() {
       const parts = name.split('/');
       
       if (parts.length > 1) {
-        const category = parts[0];
+        const category = parts.slice(0, -1).join('/');
         if (!groupedWildcards[category]) {
           groupedWildcards[category] = [];
         }
