@@ -77,7 +77,7 @@ function refresh() {
     Object.keys(groupedWildcards).sort().forEach(category => {
       if (category !== '_root') {
         const categoryHeader = document.createElement('h4');
-        categoryHeader.textContent = `${category}_`;
+        categoryHeader.textContent = `${category}/`;
         categoryHeader.style.margin = '10px 0 5px 0';
         categoryHeader.style.color = '#666';
         categoryHeader.style.fontSize = '14px';
@@ -86,7 +86,8 @@ function refresh() {
       
       groupedWildcards[category].sort().forEach(name => {
         const li = document.createElement('li');
-        li.textContent = `${name}.txt`;
+        const displayParts = name.split('/');
+        li.textContent = `${displayParts[displayParts.length - 1]}.txt`;
         li.style.paddingLeft = category !== '_root' ? '15px' : '0px';
         
         const del = document.createElement('button');

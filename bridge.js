@@ -11,7 +11,7 @@
       return function() {
         const array = new Uint32Array(1);
         crypto.getRandomValues(array);
-        return array / (0xFFFFFFFF + 1);
+        return array[0] / (0xFFFFFFFF + 1);
       };
     }
     return Math.random;
@@ -113,7 +113,8 @@
       }
 
       // Check against the *current* result, not the original txt
-      const hasCondition = result.includes(`${varName}=${varValue}`);
+      const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
+      const hasCondition = conditionRe.test(result);
       
       return hasCondition ? thenBranch : elseBranch;
     });
@@ -141,7 +142,7 @@
   }
 
   function removeExclusiveTags(text) {
-    const exclusionPattern = /!((?:"[^"]+")|(?:[A-Za-z0-9_ ,-]+))/g;
+    const exclusionPattern = /!((?:"[^"]+")|(?:[\w./-]+(?:,\s*[\w./-]+)*))/g;
     const exclusions = [];
     let result = text;
     result = result.replace(exclusionPattern, (fullMatch, tag) => {
