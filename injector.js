@@ -226,22 +226,9 @@
           const newBody = JSON.stringify(json);
           if (typeof input === 'string') {
             init = { ...init, body: newBody };
-          } else {
-            // Clone the request properly to preserve headers, etc.
-            const originalRequest = (input instanceof Request) ? input : new Request(input, init);
-            const clonedHeaders = new Headers(originalRequest.headers);
-            const clonedRequestInit = {
-              method: originalRequest.method,
-              headers: clonedHeaders,
-              body: newBody, // new body
-              credentials: originalRequest.credentials,
-              cache: originalRequest.cache,
-              redirect: originalRequest.redirect,
-              referrer: originalRequest.referrer,
-              integrity: originalRequest.integrity,
-              signal: originalRequest.signal,
-            };
-            input = new Request(originalRequest.url, clonedRequestInit);
+          } else if (input instanceof Request) {
+            // Clone the request to create a new one with the modified body
+            input = new Request(input.clone(), { body: newBody });
             init = {}; // All properties are now in the new Request object
           }
         }

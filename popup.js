@@ -57,7 +57,7 @@ function refresh() {
     
     Object.keys(map).forEach(name => {
       // Use original key format for both storage and display
-      const parts = name.split(/[\/_-]/);
+      const parts = name.split('/');
       
       if (parts.length > 1) {
         const category = parts[0];

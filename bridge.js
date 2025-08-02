@@ -105,14 +105,12 @@
     // --- Conditional Tags ---
     // @if{variable=value|then|else}
     result = result.replace(/@if{([^}]+)}/g, (match, content) => {
-      const parts = content.split('|');
-      const condition = parts || '';
-      const thenBranch = parts || '';
-      const elseBranch = parts || '';
+      const [cond, thenBranch = '', elseBranch = ''] = content.split('|');
+      const [varName, varValue = ''] = cond.split('=').map(s => s.trim());
 
-      const condParts = condition.split('=').map(s => s.trim());
-      const varName = condParts;
-      const varValue = condParts;
+      if (!varName) {
+        return elseBranch;
+      }
 
       // Check against the *current* result, not the original txt
       const hasCondition = result.includes(`${varName}=${varValue}`);
@@ -122,15 +120,14 @@
 
     // @scene{keyword|then|else}
     result = result.replace(/@scene{([^}]+)}/g, (match, content) => {
-      const parts = content.split('|');
-      const keyword = (parts || '').trim();
-      const thenBranch = parts || '';
-      const elseBranch = parts || '';
+      const [keyword, thenBranch = '', elseBranch = ''] = content.split('|').map(s => s.trim());
 
-      if (!keyword) return elseBranch;
+      if (!keyword) {
+        return elseBranch;
+      }
 
       // Check against the *current* result for scene keywords
-      const contextPattern = new RegExp(`\\b(${keyword})\\b`, 'i');
+      const contextPattern = new RegExp(`\\b(${escapeRegExp(keyword)})\\b`, 'i');
       const hasKeyword = contextPattern.test(result);
 
       return hasKeyword ? thenBranch : elseBranch;
@@ -163,18 +160,22 @@
       result = result.replace(tagPattern, '%%REMOVED%%');
     }
 
-    return result.replace(/%%REMOVED%%/g, '')
-                   .replace(/(,\s*)+/g, ', ')
-                   .replace(/^, | ,$/g, '')
-                   .replace(/\s+/g, ' ')
-                   .trim();
+    const cleaned = result.replace(/%%REMOVED%%/g, '');
+    // The split/map/filter/join approach is generally robust.
+    // To address the review's concern about edge cases, we add a more aggressive
+    // regex cleanup pass before the final join.
+    const veryCleaned = cleaned.replace(/,\s*(,|$)/g, '$1').trim().replace(/^,|,$/g, '');
+    const parts = veryCleaned.split(',')
+                         .map(s => s.trim())
+                         .filter(Boolean);
+    return parts.join(', ');
   }
 
   function recursiveSwap(txt, dict) {
     let current = txt;
     let iteration = 0;
     // Increased iteration limit for very complex nested wildcards.
-    while (containsWildcardSyntax(current) && iteration < 500) {
+    while (containsWildcardSyntax(current) && iteration < 100) {
       const next = swap(current, dict);
       if (next === current) break;
       current = next;
