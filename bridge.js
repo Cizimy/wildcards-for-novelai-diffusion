@@ -227,6 +227,21 @@
   };
 
   function getPropertyByScope(obj, scope) {
+    const scopeLower = scope.toLowerCase().trim();
+
+    if (scopeLower === 'prompt' || scopeLower === 'input') {
+      return obj.prompt ?? obj.input;
+    }
+    
+    if (scopeLower === 'uc' || scopeLower === 'negative_prompt') {
+      if (typeof obj.uc === 'string') return obj.uc;
+      if (typeof obj.negative_prompt === 'string') return obj.negative_prompt;
+      if (obj?.parameters && typeof obj.parameters.negative_prompt === 'string') {
+        return obj.parameters.negative_prompt;
+      }
+      return ''; // Return empty string if none found
+    }
+
     if (typeof obj[scope] !== 'undefined') {
       return obj[scope];
     }
