@@ -1,9 +1,23 @@
 // injector.js
 (() => {
   const TARGET = 'https://image.novelai.net/ai/generate-image';
-  const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
+  const curlyPattern = /{([^{}]*\|[^{}]*)}/;
   const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-  const simpleWildcardPattern = /__([A-Za-z0-9_-]+)__/;
+  const simpleWildcardPattern = /__([A-Za-z0-9_\/-]+)__/;
+  
+  // Enhanced RNG system using crypto.getRandomValues for better randomness
+  function createRNG() {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      return function() {
+        const array = new Uint32Array(1);
+        crypto.getRandomValues(array);
+        return array[0] / (0xFFFFFFFF + 1);
+      };
+    }
+    // Fallback to Math.random if crypto is not available
+    return Math.random;
+  }
+  const rng = createRNG();
   function containsWildcardSyntax(text) {
     return simpleWildcardPattern.test(text) ||
       curlyPattern.test(text) ||
@@ -78,7 +92,10 @@
           img = c.querySelector("img");
         }
       });
-      if (!img || !img.src) return alert("No image!");
+      if (!img || !img.src) {
+        console.warn('[Wildcard] No image found for img2img metadata extraction');
+        return;
+      }
       const ab = await (await fetch(img.src)).arrayBuffer();
       const raw = extractPngMetadata(ab);
       const commentChunk = raw.Comment;
@@ -149,7 +166,7 @@
     const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
     if (totalWeight <= 0) return weighted[0]?.label || '';
     
-    let random = Math.random() * totalWeight;
+    let random = rng() * totalWeight;
     for (const item of weighted) {
       random -= item.weight;
       if (random <= 0) return item.label;
@@ -186,7 +203,7 @@
       const forceV3 = lines.some(line => containsWildcardSyntax(line));
       const effectiveV3 = forceV3 || v3;
       if (effectiveV3) {
-        return lines[Math.floor(Math.random() * lines.length)];
+        return lines[Math.floor(rng() * lines.length)];
       } else {
         return `||${lines.join('|')}||`;
       }
@@ -199,7 +216,7 @@
       if (opts.some(opt => opt.includes(':'))) {
         return chooseWeighted(opts);
       } else {
-        return opts[Math.floor(Math.random() * opts.length)];
+        return opts[Math.floor(rng() * opts.length)];
       }
     });
 
@@ -210,7 +227,7 @@
       if (opts.some(opt => opt.includes(':'))) {
         return chooseWeighted(opts);
       } else {
-        return opts[Math.floor(Math.random() * opts.length)];
+        return opts[Math.floor(rng() * opts.length)];
       }
     });
 
@@ -239,7 +256,7 @@
         return outdoorOption;
       } else {
         // Default fallback - randomly choose
-        return Math.random() < 0.5 ? indoorOption : outdoorOption;
+        return rng() < 0.5 ? indoorOption : outdoorOption;
       }
     });
 
@@ -261,14 +278,19 @@
     // Remove exclusion markers
     let result = text.replace(/!([A-Za-z0-9_-]+)/g, '');
     
-    // Remove conflicting tags
+    // Remove conflicting tags using placeholder approach to handle commas properly
     for (const exclusion of exclusions) {
-      const tagPattern = new RegExp(`\\b${exclusion}\\b`, 'gi');
-      result = result.replace(tagPattern, '');
+      // Use more precise boundary matching to avoid compound words
+      const tagPattern = new RegExp(`(^|[,\\s])${exclusion}(?=$|[,\\s])`, 'gi');
+      result = result.replace(tagPattern, '$1%%REMOVED%%');
     }
     
-    // Clean up extra spaces and commas
-    result = result.replace(/,\s*,/g, ',').replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/\s+/g, ' ');
+    // Clean up placeholders and fix comma issues
+    result = result.replace(/%%REMOVED%%/g, '')
+                   .replace(/,\s*,/g, ',')
+                   .replace(/^\s*,\s*|\s*,\s*$/g, '')
+                   .replace(/\s+/g, ' ')
+                   .trim();
     
     return result;
   }
@@ -302,6 +324,10 @@
     return o;
   };
   /* 2‑A. fetch 패치 */
+  // Guard against double patching
+  if (window.__wildPatched__) return;
+  window.__wildPatched__ = true;
+  
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     try {
@@ -406,7 +432,7 @@
       }
       function update() {
         const txt = textBeforeCaret();
-        let m = txt.match(/__([A-Za-z0-9_-]+)__(?:([A-Za-z0-9 \-_]*))$/);
+        let m = txt.match(/__([A-Za-z0-9_\/-]+)__(?:([A-Za-z0-9 \-_]*))$/);
         if (m && dict[m[1]]) {
           const fileKey = m[1];
           const part = (m[2] || '').toLowerCase();
@@ -421,7 +447,7 @@
             return;
           }
         }
-        m = txt.match(/__([A-Za-z0-9_-]*)$/);
+        m = txt.match(/__([A-Za-z0-9_\/-]*)$/);
         if (m) {
           const prefix = m[1].toLowerCase();
           const keys = Object.keys(dict)
@@ -481,10 +507,10 @@
         const full = before.toString();
         let len = 0;
         if (type === 'token') {
-          const m = full.match(/__([A-Za-z0-9_-]*)$/);
+          const m = full.match(/__([A-Za-z0-9_\/-]*)$/);
           len = m ? m[0].length : 0;
         } else {
-          const m = full.match(/__([A-Za-z0-9_-]+)__(?:[A-Za-z0-9 \-_]*)$/);
+          const m = full.match(/__([A-Za-z0-9_\/-]+)__(?:[A-Za-z0-9 \-_]*)$/);
           len = m ? m[0].length : 0;
         }
         if (len) {
@@ -493,7 +519,32 @@
             sel.modify('extend', 'backward', 'character');
           }
         }
-        document.execCommand('insertText', false, text);
+        // Use modern Selection API instead of deprecated execCommand
+        if (navigator.clipboard && window.isSecureContext) {
+          // Modern approach: use clipboard API with paste event simulation
+          navigator.clipboard.writeText(text).then(() => {
+            document.execCommand('paste');
+          }).catch(() => {
+            // Fallback to direct text insertion
+            insertTextAtCursor(text);
+          });
+        } else {
+          insertTextAtCursor(text);
+        }
+        
+        function insertTextAtCursor(text) {
+          const selection = window.getSelection();
+          if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            const textNode = document.createTextNode(text);
+            range.insertNode(textNode);
+            range.setStartAfter(textNode);
+            range.setEndAfter(textNode);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        }
         hide();
         if (type === 'token') {
           setTimeout(update, 0);

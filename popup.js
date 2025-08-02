@@ -13,10 +13,7 @@ fileInput.addEventListener('change', () => {
     let remaining = files.length;
     files.forEach(f => {
       // Enhanced: Support hierarchical file names (scene_indoor.txt, lighting_natural.txt)
-      let key = f.name.replace(/\.[^.]+$/, '');
-      
-      // Convert underscores and hyphens to forward slashes for hierarchy display
-      const hierarchicalKey = key.replace(/[_-]/g, '/');
+      const key = f.name.replace(/\.[^.]+$/, '');
 
       const reader = new FileReader();
       reader.onload = () => {
@@ -57,9 +54,8 @@ function refresh() {
     const groupedWildcards = {};
     
     Object.keys(map).forEach(name => {
-      // Create hierarchical display name
-      const displayName = name.replace(/[_-]/g, '/');
-      const parts = displayName.split('/');
+      // Use original key format for both storage and display
+      const parts = name.split(/[_-]/);
       
       if (parts.length > 1) {
         const category = parts[0];
@@ -79,7 +75,7 @@ function refresh() {
     Object.keys(groupedWildcards).sort().forEach(category => {
       if (category !== '_root') {
         const categoryHeader = document.createElement('h4');
-        categoryHeader.textContent = `${category}/`;
+        categoryHeader.textContent = `${category}_`;
         categoryHeader.style.margin = '10px 0 5px 0';
         categoryHeader.style.color = '#666';
         categoryHeader.style.fontSize = '14px';
@@ -88,8 +84,7 @@ function refresh() {
       
       groupedWildcards[category].sort().forEach(name => {
         const li = document.createElement('li');
-        const displayName = name.replace(/[_-]/g, '/');
-        li.textContent = `${displayName}.txt`;
+        li.textContent = `${name}.txt`;
         li.style.paddingLeft = category !== '_root' ? '15px' : '0px';
         
         const del = document.createElement('button');
