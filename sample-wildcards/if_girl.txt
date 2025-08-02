@@ -1,0 +1,1 @@
+@if{input:1girl|solo focus|group focus}

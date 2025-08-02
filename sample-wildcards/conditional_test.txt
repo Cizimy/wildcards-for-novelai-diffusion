@@ -4,7 +4,7 @@
 # --- Basic Test ---
 # If '1girl' is in the main prompt, add 'solo focus'. Otherwise, add 'group focus'.
 __if_girl__
-@if{prompt:1girl|solo focus|group focus}
+@if{input:1girl|solo focus|group focus}
 
 # --- Negation Test ---
 # If 'nsfw' is NOT in the negative prompt (uc), add 'safe for work'.
@@ -16,7 +16,7 @@ __if_safe__
 # If the prompt contains 'landscape', suggest a 'wide shot'.
 # If the prompt contains 'portrait', suggest a 'close-up'.
 __dynamic_camera__
-@if{prompt:landscape|wide shot|@if{prompt:portrait|close-up|medium shot}}
+@if{input:landscape|wide shot|@if{input:portrait|close-up|medium shot}}
 
 # --- Cross-Field Interaction ---
 # If 'close-up' is in the prompt, add 'detailed face' to the prompt,
@@ -25,10 +25,10 @@ __dynamic_camera__
 # within the current field. It can't add a tag to a *different* field.
 # However, it demonstrates the conditional check.
 __smart_closeup__
-@if{prompt:close-up|detailed face|}
+@if{input:close-up|detailed face|}
 
 # --- A more practical example for cross-field check ---
 # If the user is trying to generate a 'photo', but has 'anime' in their negative prompt,
 # this wildcard will resolve to 'photorealistic anime style' to guide the AI.
 __style_check__
-@if{prompt:photo|@if{uc:anime|photorealistic anime style|realistic photo}|}
+@if{input:photo|@if{uc:anime|photorealistic anime style|realistic photo}|}

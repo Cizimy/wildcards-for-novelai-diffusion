@@ -85,23 +85,6 @@
       // as the recursive nature handles nested replacements.
       return lines[Math.floor(rng() * lines.length)];
     });
-    result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
-      const opts = group.split('|');
-      if (opts.some(opt => /(?<!\\):/.test(opt))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-    result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (match, group) => {
-      const opts = group.split('|');
-      if (opts.some(opt => /(?<!\\):/.test(opt))) {
-        return chooseWeighted(opts);
-      } else {
-        return opts[Math.floor(rng() * opts.length)];
-      }
-    });
-    
     // --- Conditional Tags ---
     // @if{variable=value|then|else}
     result = result.replace(/@if{([^}]+)}/g, (match, content) => {
@@ -112,8 +95,11 @@
       if (conditionParts.length === 1) {
         const [varName, varValue = ''] = conditionSpec.split('=').map(s => s.trim());
         if (!varName) return elseBranch;
+
+        // FIX: To prevent infinite loops, check against a string that *excludes* the current match.
+        const checkString = result.replace(match, '');
         const conditionRe = new RegExp(`\\b${escapeRegExp(varName)}=${escapeRegExp(varValue)}\\b`);
-        return conditionRe.test(result) ? thenBranch : elseBranch;
+        return conditionRe.test(checkString) ? thenBranch : elseBranch;
       }
 
       // New @if{scope:condition} syntax
@@ -146,6 +132,23 @@
       const hasKeyword = contextPattern.test(result);
 
       return hasKeyword ? thenBranch : elseBranch;
+    });
+
+    result = result.replace(/{([^|{}]+(?:\|[^|{}]+)+)}/g, (match, group) => {
+      const opts = group.split('|');
+      if (opts.some(opt => /(?<!\\):/.test(opt))) {
+        return chooseWeighted(opts);
+      } else {
+        return opts[Math.floor(rng() * opts.length)];
+      }
+    });
+    result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (match, group) => {
+      const opts = group.split('|');
+      if (opts.some(opt => /(?<!\\):/.test(opt))) {
+        return chooseWeighted(opts);
+      } else {
+        return opts[Math.floor(rng() * opts.length)];
+      }
     });
 
     return result;
@@ -189,10 +192,20 @@
   function recursiveSwap(txt, dict, context) {
     let current = txt;
     let iteration = 0;
+    const history = new Set([current]);
+
     // Increased iteration limit for very complex nested wildcards.
     while (containsWildcardSyntax(current) && iteration < 100) {
       const next = swap(current, dict, context);
       if (next === current) break;
+
+      // FIX: Detect cyclic loops by checking if we've seen the next state before.
+      if (history.has(next)) {
+        console.warn(`[Wildcard] Infinite loop detected. Breaking. History:`, Array.from(history));
+        break;
+      }
+      history.add(next);
+
       current = next;
       iteration++;
     }
@@ -216,9 +229,15 @@
   };
 
   function getPropertyByScope(obj, scope) {
-    // Simple key access for now. Can be expanded for nested access later.
-    // e.g., 'prompt', 'uc', 'sampler_options.seed'
-    return obj[scope];
+    // Prefer top-level property if it exists (like 'input')
+    if (typeof obj[scope] !== 'undefined') {
+      return obj[scope];
+    }
+    // Fallback to checking inside 'parameters' (like 'uc')
+    if (obj?.parameters && typeof obj.parameters[scope] !== 'undefined') {
+      return obj.parameters[scope];
+    }
+    return undefined; // Explicitly return undefined if not found
   }
 
   // --- End of moved functions ---
@@ -264,7 +283,7 @@
     }
 
     const { id, payload } = e.data;
-    if (!id || !payload) return;
+    if (typeof id === 'undefined' || !payload) return;
 
     try {
       const result = deepSwap(payload, wildcards, payload);

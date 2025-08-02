@@ -1,0 +1,1 @@
+@if{prompt:landscape|wide shot|@if{prompt:portrait|close-up|medium shot}}
